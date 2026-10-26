@@ -44,6 +44,7 @@ The dockable **MediaTek MDDB** browser provides:
 - MediaTek packed string-pool reference decoding (`14-bit bucket + 18-bit byte offset`);
 - decoding of the standard MDDB enum record layout;
 - enum/type-name backreferences where the database exposes them;
+- typedef-chain and tagged struct/union resolution, including field offsets and field types for the common MDDB layout;
 - **Find in Program** for exact firmware string matches;
 - **Go to Code Xref** to jump from a matched firmware string to code using Ghidra's reference database;
 - **Annotate Program** to add analysis labels, comments, and bookmarks at strings and code xrefs.
@@ -68,7 +69,29 @@ u_get_iq_dump_result_v3_req_param_struct
 u_get_iq_dump_result_v3_cnf_param_struct
 ```
 
-The last `u_*_param_struct` names are present in the string pool but are not directly joined to the dispatch types by the packed-reference mechanism used for enums and union members. The plugin deliberately leaves that final generation-specific PDU-schema join unresolved rather than guessing it.
+Those names are also keys into the `type` column family. Following the type-alias chain into the tagged `struct` records recovers the concrete IQ payload layouts in the tested MT6880 database:
+
+```c
+// URF_TEST_CMD_TRIGGER_IQ_DUMP_MODE_V3 = 0x58
+struct u_trigger_iq_dump_mode_v3_req_param_struct { // size 4, align 2
+    kal_uint16 enable_iq_dump; // +0x0
+    kal_uint16 ant_idx;        // +0x2
+};
+struct u_trigger_iq_dump_mode_v3_cnf_param_struct { // size 2, align 2
+    kal_uint16 dump_status;    // +0x0
+};
+
+// URF_TEST_CMD_GET_IQ_DUMP_RESULT_V3 = 0x59
+struct u_get_iq_dump_result_v3_req_param_struct { // size 1, align 1
+    kal_bool get_result;       // +0x0
+};
+struct u_get_iq_dump_result_v3_cnf_param_struct { // size 4, align 2
+    kal_uint16 is_data_ready;       // +0x0
+    kal_uint16 data_section_length; // +0x2
+};
+```
+
+The plugin derives these from MDDB rather than hard-coding the names. Unknown generations or record layouts still stay raw instead of being guessed.
 
 ### Program integration tested on FM350
 
@@ -129,7 +152,9 @@ Currently decoded and validated:
 - all RocksDB column families in raw read-only mode;
 - the `sp` pool's packed `14-bit bucket + 18-bit byte offset` references;
 - the standard enum representation used by `urf_test_cmd_type`: a 23-byte header followed by `count × (u32 value, u32 string_ref)`;
-- reverse links from enum record → type record → exposed enum/type names when present.
+- reverse links from enum record → type record → exposed enum/type names when present;
+- type-alias chains whose packed string refs are themselves `type` keys;
+- tagged struct/union keys (`0x61 || string_ref` / `0x62 || string_ref`) and the common field descriptors used by the tested MT6880 database.
 
 The extractor rejects path traversal, duplicate archive names, invalid section bounds, inconsistent decompressed sizes, and malformed LZMA properties.
 

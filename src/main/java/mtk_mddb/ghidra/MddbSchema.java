@@ -9,6 +9,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.RocksDB;
@@ -16,12 +17,42 @@ import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 
 final class MddbSchema {
+    private static final int TYPE_CHAIN_LIMIT = 16;
+    private static final int STRUCT_HEADER_SIZE = 13;
+    private static final int FIELD_DESCRIPTOR_SIZE = 25;
+
     private record EnumMemberBase(byte[] enumRecordKey, long value) {}
 
     record EnumMember(String enumName, long value, String memberName, String enumRecordKey) {
         String summary() {
             String prefix = enumName == null || enumName.isBlank() ? "enum " + enumRecordKey : enumName;
             return prefix + " = 0x" + Long.toHexString(value);
+        }
+    }
+
+    private record StructField(long offset, String typeName, String fieldName) {
+        String summary() {
+            return String.format("+0x%x %s %s", offset, typeName, fieldName);
+        }
+    }
+
+    private record StructLayout(String kind, long size, long alignment, List<StructField> fields) {
+        String summary() {
+            StringBuilder out = new StringBuilder(kind);
+            if (size <= 0x100000 && alignment <= 0x10000) {
+                out.append(" size=").append(size).append(" align=").append(alignment);
+            }
+            if (!fields.isEmpty()) {
+                out.append(" { ");
+                for (int i = 0; i < fields.size(); i++) {
+                    if (i != 0) {
+                        out.append("; ");
+                    }
+                    out.append(fields.get(i).summary());
+                }
+                out.append(" }");
+            }
+            return out.toString();
         }
     }
 
@@ -32,6 +63,7 @@ final class MddbSchema {
     private final ColumnFamilyHandle structs;
     private final Map<Integer, List<EnumMemberBase>> enumMembersByStringRef = new HashMap<>();
     private final Map<String, String> enumNameCache = new HashMap<>();
+    private final Map<Integer, String> typeSummaryCache = new HashMap<>();
     private boolean enumIndexBuilt;
 
     MddbSchema(RocksDB db, ColumnFamilyHandle sp, ColumnFamilyHandle enums,
@@ -93,15 +125,126 @@ final class MddbSchema {
         if (bucket < 0 || bucket > 0x3fff || offset < 0 || offset > 0x3ffff) {
             return "";
         }
-        List<EnumMember> members = findEnumMembers(stringRef(bucket, offset));
-        if (members.isEmpty()) {
-            return "";
-        }
+        int ref = stringRef(bucket, offset);
         LinkedHashSet<String> summaries = new LinkedHashSet<>();
-        for (EnumMember member : members) {
+        for (EnumMember member : findEnumMembers(ref)) {
             summaries.add(member.summary());
         }
+        String typeSummary = describeType(ref);
+        if (!typeSummary.isBlank()) {
+            summaries.add(typeSummary);
+        }
         return String.join("; ", summaries);
+    }
+
+    private String describeType(int startRef) throws RocksDBException {
+        if (typeSummaryCache.containsKey(startRef)) {
+            return typeSummaryCache.get(startRef);
+        }
+
+        List<String> names = new ArrayList<>();
+        Set<Integer> seen = new LinkedHashSet<>();
+        int currentRef = startRef;
+        StructLayout layout = null;
+
+        for (int depth = 0; depth < TYPE_CHAIN_LIMIT && seen.add(currentRef); depth++) {
+            String name = decodeStringRef(currentRef);
+            if (name == null || name.isBlank()) {
+                break;
+            }
+            names.add(name);
+
+            byte[] typeRecord = db.get(types, le32(currentRef));
+            if (typeRecord == null) {
+                layout = findStructLayout(currentRef, name);
+                break;
+            }
+            if (typeRecord.length < 4) {
+                break;
+            }
+            int nextRef = u32(typeRecord, typeRecord.length - 4);
+            String nextName = decodeStringRef(nextRef);
+            if (nextName == null || nextName.isBlank()) {
+                break;
+            }
+            currentRef = nextRef;
+        }
+
+        if (layout == null) {
+            typeSummaryCache.put(startRef, "");
+            return "";
+        }
+
+        List<String> publicNames = names.stream()
+            .filter(name -> !name.startsWith("struct_") && !name.startsWith("union_"))
+            .distinct()
+            .toList();
+        String prefix = publicNames.isEmpty() ? "" : String.join(" -> ", publicNames) + ": ";
+        String result = prefix + layout.summary();
+        typeSummaryCache.put(startRef, result);
+        return result;
+    }
+
+    private StructLayout findStructLayout(int ref, String name) throws RocksDBException {
+        if (name.startsWith("struct_")) {
+            return parseStructRecord(db.get(structs, taggedKey(0x61, ref)), "struct");
+        }
+        if (name.startsWith("union_")) {
+            return parseStructRecord(db.get(structs, taggedKey(0x62, ref)), "union");
+        }
+        StructLayout layout = parseStructRecord(db.get(structs, taggedKey(0x61, ref)), "struct");
+        return layout != null ? layout : parseStructRecord(db.get(structs, taggedKey(0x62, ref)), "union");
+    }
+
+    private StructLayout parseStructRecord(byte[] value, String kind) throws RocksDBException {
+        if (value == null || value.length < STRUCT_HEADER_SIZE) {
+            return null;
+        }
+        long size = Integer.toUnsignedLong(u32(value, 1));
+        long alignment = Integer.toUnsignedLong(u32(value, 5));
+        List<StructField> fields = new ArrayList<>();
+        Set<String> seenFields = new LinkedHashSet<>();
+
+        for (int at = STRUCT_HEADER_SIZE; at + FIELD_DESCRIPTOR_SIZE <= value.length; at++) {
+            long descriptorKind = Integer.toUnsignedLong(u32(value, at + 1));
+            if ((descriptorKind & 0xff000000L) != 0x10000000L) {
+                continue;
+            }
+            long fieldOffset = Integer.toUnsignedLong(u32(value, at + 13));
+            int typeRef = u32(value, at + 17);
+            int nameRef = u32(value, at + 21);
+            String typeName = decodeStringRef(typeRef);
+            String fieldName = decodeStringRef(nameRef);
+            if (!looksIdentifier(typeName) || !looksIdentifier(fieldName)) {
+                continue;
+            }
+            if (fieldOffset > 0x1000000L) {
+                continue;
+            }
+            String identity = fieldOffset + "\u0000" + typeName + "\u0000" + fieldName;
+            if (seenFields.add(identity)) {
+                fields.add(new StructField(fieldOffset, typeName, fieldName));
+            }
+            at += FIELD_DESCRIPTOR_SIZE - 1;
+        }
+        return new StructLayout(kind, size, alignment, List.copyOf(fields));
+    }
+
+    private static boolean looksIdentifier(String value) {
+        if (value == null || value.isEmpty()) {
+            return false;
+        }
+        char first = value.charAt(0);
+        if (!(Character.isLetter(first) || first == '_')) {
+            return false;
+        }
+        for (int i = 1; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (!(Character.isLetterOrDigit(ch) || ch == '_' || ch == ':')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void ensureEnumIndex() throws RocksDBException {
@@ -175,6 +318,14 @@ final class MddbSchema {
             }
             structIt.status();
         }
+    }
+
+    private static byte[] taggedKey(int tag, int ref) {
+        byte[] key = new byte[5];
+        key[0] = (byte) tag;
+        byte[] refBytes = le32(ref);
+        System.arraycopy(refBytes, 0, key, 1, refBytes.length);
+        return key;
     }
 
     private static byte[] le32(int value) {

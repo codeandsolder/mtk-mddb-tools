@@ -2,10 +2,13 @@ package mtk_mddb.ghidra;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -25,7 +28,7 @@ class MddbSchemaTest {
     @Test
     void resolvesPackedStringRefThroughEnumAndTypeName() throws Exception {
         try (Options options = new Options().setCreateIfMissing(true);
-             RocksDB db = RocksDB.open(options, tempDir.resolve("db").toString());
+             RocksDB db = RocksDB.open(options, tempDir.resolve("enum-db").toString());
              ColumnFamilyHandle sp = db.createColumnFamily(cf("sp"));
              ColumnFamilyHandle enums = db.createColumnFamily(cf("enum"));
              ColumnFamilyHandle types = db.createColumnFamily(cf("type"));
@@ -52,12 +55,79 @@ class MddbSchemaTest {
         }
     }
 
+    @Test
+    void resolvesTypeAliasesAndStructFields() throws Exception {
+        try (Options options = new Options().setCreateIfMissing(true);
+             RocksDB db = RocksDB.open(options, tempDir.resolve("struct-db").toString());
+             ColumnFamilyHandle sp = db.createColumnFamily(cf("sp"));
+             ColumnFamilyHandle enums = db.createColumnFamily(cf("enum"));
+             ColumnFamilyHandle types = db.createColumnFamily(cf("type"));
+             ColumnFamilyHandle structs = db.createColumnFamily(cf("struct"))) {
+
+            Map<String, Integer> offsets = new LinkedHashMap<>();
+            ByteArrayOutputStream pool = new ByteArrayOutputStream();
+            for (String value : new String[] {
+                    "TEST_ALIAS", "TEST_PAYLOAD", "struct_test_payload",
+                    "kal_uint16", "field_a", "field_b"}) {
+                offsets.put(value, pool.size());
+                pool.writeBytes(value.getBytes(StandardCharsets.UTF_8));
+                pool.write(0);
+            }
+            db.put(sp, le32(2), pool.toByteArray());
+
+            int aliasRef = packStringRef(2, offsets.get("TEST_ALIAS"));
+            int payloadRef = packStringRef(2, offsets.get("TEST_PAYLOAD"));
+            int structRef = packStringRef(2, offsets.get("struct_test_payload"));
+            int uint16Ref = packStringRef(2, offsets.get("kal_uint16"));
+            int fieldARef = packStringRef(2, offsets.get("field_a"));
+            int fieldBRef = packStringRef(2, offsets.get("field_b"));
+
+            db.put(types, le32(aliasRef), typeAlias(payloadRef));
+            db.put(types, le32(payloadRef), typeAlias(structRef));
+
+            ByteBuffer structRecord = ByteBuffer.allocate(13 + 2 * 25).order(ByteOrder.LITTLE_ENDIAN);
+            structRecord.put((byte) 0).putInt(4).putInt(2).putInt(0);
+            putField(structRecord, 0, uint16Ref, fieldARef);
+            putField(structRecord, 2, uint16Ref, fieldBRef);
+            db.put(structs, taggedKey(0x61, structRef), structRecord.array());
+
+            MddbSchema schema = new MddbSchema(db, sp, enums, types, structs);
+            assertEquals(
+                "TEST_ALIAS -> TEST_PAYLOAD: struct size=4 align=2 { " +
+                    "+0x0 kal_uint16 field_a; +0x2 kal_uint16 field_b }",
+                schema.describeSpMatch(le32(2), offsets.get("TEST_ALIAS")));
+        }
+    }
+
+    private static byte[] typeAlias(int nextRef) {
+        byte[] value = new byte[17];
+        ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN).putInt(13, nextRef);
+        return value;
+    }
+
+    private static void putField(ByteBuffer out, int offset, int typeRef, int nameRef) {
+        out.put((byte) 0);
+        out.putInt(0x10000000);
+        out.putInt(2);
+        out.putInt(2);
+        out.putInt(offset);
+        out.putInt(typeRef);
+        out.putInt(nameRef);
+    }
+
     private static ColumnFamilyDescriptor cf(String name) {
         return new ColumnFamilyDescriptor(name.getBytes(StandardCharsets.UTF_8));
     }
 
     private static int packStringRef(int bucket, int offset) {
         return (offset << 14) | bucket;
+    }
+
+    private static byte[] taggedKey(int tag, int ref) {
+        byte[] key = new byte[5];
+        key[0] = (byte) tag;
+        System.arraycopy(le32(ref), 0, key, 1, 4);
+        return key;
     }
 
     private static byte[] le32(int value) {
