@@ -1,0 +1,40 @@
+def ghidraInstallDir
+if (System.env.GHIDRA_INSTALL_DIR) {
+    ghidraInstallDir = System.env.GHIDRA_INSTALL_DIR
+} else if (project.hasProperty("GHIDRA_INSTALL_DIR")) {
+    ghidraInstallDir = project.getProperty("GHIDRA_INSTALL_DIR")
+}
+if (!ghidraInstallDir) {
+    throw new GradleException("GHIDRA_INSTALL_DIR is not defined")
+}
+apply from: new File(ghidraInstallDir).getCanonicalPath() + "/support/buildExtension.gradle"
+
+repositories { mavenCentral() }
+
+def detectRocksPlatform = {
+    def os = System.getProperty("os.name").toLowerCase()
+    if (os.contains("win")) return "win64"
+    if (os.contains("mac") || os.contains("darwin")) return "osx"
+    return "linux64"
+}
+def rocksPlatform = project.findProperty("rocksdbPlatform") ?: System.getenv("ROCKSDB_PLATFORM") ?: detectRocksPlatform()
+
+dependencies {
+    implementation fileTree(dir: "lib", include: ["*.jar"])
+    implementation "org.tukaani:xz:1.10"
+    implementation "org.rocksdb:rocksdbjni:11.1.1:${rocksPlatform}"
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher:1.11.4"
+}
+
+test {
+    useJUnitPlatform()
+}
+
+for (pattern in [
+    ".git/**", ".github/**", ".venv/**", ".pytest_cache/**", ".ruff_cache/**",
+    "dist/**", "tests/**", "src/test/**", "src/mtk_mddb/**", "pyproject.toml", "uv.lock",
+    "gradle/**", "gradlew", "gradlew.bat"
+]) {
+    buildExtension.exclude pattern
+}

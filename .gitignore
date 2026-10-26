@@ -11,3 +11,7 @@ build/
 *.sst
 DATAA.bin
 DATAI.bin
+
+.gradle/
+lib/
+.cache/

@@ -1,0 +1,43 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+<HEAD>
+  <META http-equiv="Content-Type" content="text/html; charset=windows-1252">
+  <TITLE>MediaTek MDDB</TITLE>
+  <LINK rel="stylesheet" type="text/css" href="help/shared/DefaultStyle.css">
+</HEAD>
+<BODY>
+<H1><A name="MtkMddbHelp"></A>MediaTek MDDB</H1>
+<P>The MediaTek MDDB plugin opens Catcher/META <CODE>.EDB</CODE> modem databases that use the
+<CODE>CATD</CODE> container, decodes their raw-LZMA <CODE>DATAI</CODE>/<CODE>DATAA</CODE> sections,
+and opens the RocksDB embedded in <CODE>DATAI</CODE>.</P>
+
+<H2>Browse and decode</H2>
+<OL>
+  <LI>Select <B>Tools &gt; MediaTek MDDB &gt; Open EDB...</B>.</LI>
+  <LI>Search all column families, or restrict the query to one family such as
+      <CODE>sp</CODE>, <CODE>trace</CODE>, <CODE>type</CODE>, <CODE>struct</CODE>, or <CODE>enum</CODE>.</LI>
+  <LI>The <B>Schema</B> column decodes known packed string references and standard enum members.
+      For example, the tested MT6880 database resolves
+      <CODE>URF_TEST_CMD_TRIGGER_IQ_DUMP_MODE_V3</CODE> to
+      <CODE>urf_test_cmd_type = 0x58</CODE>.</LI>
+</OL>
+
+<H2>Map database names into code</H2>
+<UL>
+  <LI><B>Find in Program</B> searches the current program for the same byte string.</LI>
+  <LI><B>Go to Code Xref</B> follows Ghidra references from the string into code and navigates to
+      the first code reference.</LI>
+  <LI><B>Annotate Program</B> adds analysis bookmarks and comments to string matches and code
+      xrefs, plus an analysis label for identifier-like string names.</LI>
+</UL>
+
+<P>The plugin does not claim that an MDDB entry is a code symbol. Production MediaTek modem
+images often omit <CODE>md1_dbginfo</CODE>; MDDB is Catcher/META schema and trace metadata. Program
+annotations are therefore explicitly marked as MDDB-derived analysis.</P>
+
+<P>The common packed string reference decoded by this plugin uses a 14-bit <CODE>sp</CODE> bucket
+and an 18-bit byte offset. The standard enum layout handled by the schema browser consists of a
+23-byte header followed by value/string-reference pairs. Generation-specific structures that do
+not expose those references are deliberately left raw rather than guessed.</P>
+</BODY>
+</HTML>
