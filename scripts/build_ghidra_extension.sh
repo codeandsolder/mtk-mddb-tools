@@ -38,5 +38,16 @@ for platform in "$@"; do
     fi
     out="dist/mtk-mddb-tools-ghidra-12.2-${platform}.zip"
     mv -f "$built" "$out"
-    printf 'built %s (%s bytes)\n' "$out" "$(stat -c %s "$out" 2>/dev/null || stat -f %z "$out")"
+
+    size="$(stat -c %s "$out" 2>/dev/null || stat -f %z "$out")"
+    if (( size > 80 * 1024 * 1024 )); then
+        echo "Refusing suspiciously large extension artifact: $out ($size bytes)" >&2
+        exit 1
+    fi
+    if unzip -Z1 "$out" | grep -Eq '(^|/)(\.cache|\.gradle|\.venv)(/|$)'; then
+        echo "Refusing extension artifact containing a build/cache directory: $out" >&2
+        exit 1
+    fi
+
+    printf 'built %s (%s bytes)\n' "$out" "$size"
 done
