@@ -32,7 +32,7 @@ test {
 }
 
 for (pattern in [
-    ".git/**", ".github/**", ".venv/**", ".pytest_cache/**", ".ruff_cache/**",
+    ".git/**", ".github/**", ".gradle/**", ".cache/**", ".venv/**", ".pytest_cache/**", ".ruff_cache/**",
     "dist/**", "tests/**", "src/test/**", "src/mtk_mddb/**", "pyproject.toml", "uv.lock",
     "gradle/**", "gradlew", "gradlew.bat"
 ]) {
