@@ -91,6 +91,17 @@ struct u_get_iq_dump_result_v3_cnf_param_struct { // size 4, align 2
 };
 ```
 
+The result PDU resolves one level further. `u_get_iq_dump_result_v3_cnf_pdu_struct` is 32,768 bytes and contains `UTSTCnfGetIqDumpResultV3pb iq_dump_result[8192]`. The element type is exactly four bytes:
+
+```c
+struct UTSTCnfGetIqDumpResultV3pb {
+    kal_int16 i_data; // +0x0
+    kal_int16 q_data; // +0x2
+};
+```
+
+So the shipping MDDB explicitly describes a result buffer of **8192 complex signed-16-bit I/Q samples**. The array count comes from the array field descriptor (`0x2000`), not from guessing based on the 32 KiB total size.
+
 The plugin derives these from MDDB rather than hard-coding the names. Unknown generations or record layouts still stay raw instead of being guessed.
 
 ### Program integration tested on FM350

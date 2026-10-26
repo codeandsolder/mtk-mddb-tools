@@ -39,8 +39,9 @@ annotations are therefore explicitly marked as MDDB-derived analysis.</P>
 and an 18-bit byte offset. The standard enum layout handled by the schema browser consists of a
 23-byte header followed by value/string-reference pairs. Type aliases are followed through the
 <CODE>type</CODE> column family into tagged <CODE>struct</CODE>/<CODE>union</CODE> records when the
-known layout is present; field offsets, types, and names are then displayed in the Schema column.
-Generation-specific structures that do not match validated layouts are deliberately left raw rather
+known layout is present; field offsets, types, names, and validated one-dimensional array counts are
+then displayed in the Schema column. On the tested MT6880 database this exposes the IQ result PDU as
+8192 elements of a four-byte signed-I/Q pair. Generation-specific structures that do not match validated layouts are deliberately left raw rather
 than guessed.</P>
 </BODY>
 </HTML>

@@ -30,9 +30,10 @@ final class MddbSchema {
         }
     }
 
-    private record StructField(long offset, String typeName, String fieldName) {
+    private record StructField(long offset, String typeName, String fieldName, long arrayCount) {
         String summary() {
-            return String.format("+0x%x %s %s", offset, typeName, fieldName);
+            String suffix = arrayCount > 0 ? "[" + arrayCount + "]" : "";
+            return String.format("+0x%x %s %s%s", offset, typeName, fieldName, suffix);
         }
     }
 
@@ -221,9 +222,17 @@ final class MddbSchema {
             if (fieldOffset > 0x1000000L) {
                 continue;
             }
-            String identity = fieldOffset + "\u0000" + typeName + "\u0000" + fieldName;
+            long arrayCount = 0;
+            if (descriptorKind == 0x10000010L && at + FIELD_DESCRIPTOR_SIZE + 4 <= value.length) {
+                arrayCount = Integer.toUnsignedLong(u32(value, at + FIELD_DESCRIPTOR_SIZE));
+                if (arrayCount == 0 || arrayCount > 0x10000000L) {
+                    arrayCount = 0;
+                }
+            }
+            String identity = fieldOffset + "\u0000" + typeName + "\u0000" + fieldName +
+                "\u0000" + arrayCount;
             if (seenFields.add(identity)) {
-                fields.add(new StructField(fieldOffset, typeName, fieldName));
+                fields.add(new StructField(fieldOffset, typeName, fieldName, arrayCount));
             }
             at += FIELD_DESCRIPTOR_SIZE - 1;
         }

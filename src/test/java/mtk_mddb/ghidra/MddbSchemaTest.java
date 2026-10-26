@@ -99,6 +99,44 @@ class MddbSchemaTest {
         }
     }
 
+    @Test
+    void resolvesStructArrayCount() throws Exception {
+        try (Options options = new Options().setCreateIfMissing(true);
+             RocksDB db = RocksDB.open(options, tempDir.resolve("array-db").toString());
+             ColumnFamilyHandle sp = db.createColumnFamily(cf("sp"));
+             ColumnFamilyHandle enums = db.createColumnFamily(cf("enum"));
+             ColumnFamilyHandle types = db.createColumnFamily(cf("type"));
+             ColumnFamilyHandle structs = db.createColumnFamily(cf("struct"))) {
+
+            Map<String, Integer> offsets = new LinkedHashMap<>();
+            ByteArrayOutputStream pool = new ByteArrayOutputStream();
+            for (String value : new String[] {
+                    "TEST_PDU", "struct_test_pdu", "TEST_ELEMENT", "iq_dump_result"}) {
+                offsets.put(value, pool.size());
+                pool.writeBytes(value.getBytes(StandardCharsets.UTF_8));
+                pool.write(0);
+            }
+            db.put(sp, le32(3), pool.toByteArray());
+
+            int pduRef = packStringRef(3, offsets.get("TEST_PDU"));
+            int structRef = packStringRef(3, offsets.get("struct_test_pdu"));
+            int elementRef = packStringRef(3, offsets.get("TEST_ELEMENT"));
+            int fieldRef = packStringRef(3, offsets.get("iq_dump_result"));
+            db.put(types, le32(pduRef), typeAlias(structRef));
+
+            ByteBuffer structRecord = ByteBuffer.allocate(13 + 29).order(ByteOrder.LITTLE_ENDIAN);
+            structRecord.put((byte) 0).putInt(32768).putInt(2).putInt(0);
+            structRecord.put((byte) 0).putInt(0x10000010).putInt(32768).putInt(2)
+                .putInt(0).putInt(elementRef).putInt(fieldRef).putInt(8192);
+            db.put(structs, taggedKey(0x61, structRef), structRecord.array());
+
+            MddbSchema schema = new MddbSchema(db, sp, enums, types, structs);
+            assertEquals(
+                "TEST_PDU: struct size=32768 align=2 { +0x0 TEST_ELEMENT iq_dump_result[8192] }",
+                schema.describeSpMatch(le32(3), offsets.get("TEST_PDU")));
+        }
+    }
+
     private static byte[] typeAlias(int nextRef) {
         byte[] value = new byte[17];
         ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN).putInt(13, nextRef);
