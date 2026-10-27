@@ -95,6 +95,28 @@ public final class MddbDatabase implements AutoCloseable {
         return schema.describeSpMatch(result.key(), result.offset());
     }
 
+    MddbSchema.ResolvedType resolvedType(MddbSearchResult result) throws RocksDBException {
+        if (schema == null || !result.columnFamily().equals("sp") || !result.field().equals("value")) {
+            return null;
+        }
+        return schema.resolveTypeForSpMatch(result.key(), result.offset());
+    }
+
+    MddbSchema.ResolvedType resolvedTypeByName(String name) throws RocksDBException {
+        return schema == null ? null : schema.resolveTypeByName(name);
+    }
+
+    MddbSchema.EnumDefinition resolvedEnumByName(String name) throws RocksDBException {
+        return schema == null ? null : schema.resolveEnumByName(name);
+    }
+
+    List<MddbSchema.EnumDefinition> enumDefinitions(MddbSearchResult result) throws RocksDBException {
+        if (schema == null || !result.columnFamily().equals("sp") || !result.field().equals("value")) {
+            return List.of();
+        }
+        return schema.enumDefinitionsForSpMatch(result.key(), result.offset());
+    }
+
     public List<MddbSearchResult> search(String needleText, String columnFamily, int limit) throws RocksDBException {
         byte[] needle = needleText.getBytes(StandardCharsets.UTF_8);
         if (needle.length == 0) {

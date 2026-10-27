@@ -1,6 +1,7 @@
 package mtk_mddb.ghidra;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -8,6 +9,7 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -44,7 +46,7 @@ class MddbSchemaTest {
             enumRecord.position(19).putInt(1).putInt(0x58).putInt(memberRef);
             db.put(enums, enumKey, enumRecord.array());
 
-            byte[] typeKey = le32(0x20);
+            byte[] typeKey = le32(enumNameRef);
             db.put(types, typeKey, enumKey);
             ByteBuffer structRecord = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
             structRecord.put(typeKey).putInt(enumNameRef);
@@ -52,6 +54,13 @@ class MddbSchemaTest {
 
             MddbSchema schema = new MddbSchema(db, sp, enums, types, structs);
             assertEquals("TEST_ENUM = 0x58", schema.describeSpMatch(le32(1), 0));
+            MddbSchema.EnumDefinition enumDefinition =
+                schema.enumDefinitionsForSpMatch(le32(1), 0).get(0);
+            assertEquals("TEST_ENUM", enumDefinition.name());
+            assertEquals(4, enumDefinition.size());
+            assertEquals(List.of(new MddbSchema.EnumValue(0x58, "TEST_MEMBER")),
+                enumDefinition.values());
+            assertEquals("TEST_ENUM", schema.resolveEnumByName("TEST_ENUM").name());
         }
     }
 
@@ -96,6 +105,12 @@ class MddbSchemaTest {
                 "TEST_ALIAS -> TEST_PAYLOAD: struct size=4 align=2 { " +
                     "+0x0 kal_uint16 field_a; +0x2 kal_uint16 field_b }",
                 schema.describeSpMatch(le32(2), offsets.get("TEST_ALIAS")));
+            MddbSchema.ResolvedType type = schema.resolveTypeByName("TEST_ALIAS");
+            assertNotNull(type);
+            assertEquals("TEST_ALIAS", type.name());
+            assertEquals(4, type.size());
+            assertEquals(2, type.fields().size());
+            assertEquals("field_b", type.fields().get(1).fieldName());
         }
     }
 
@@ -134,6 +149,9 @@ class MddbSchemaTest {
             assertEquals(
                 "TEST_PDU: struct size=32768 align=2 { +0x0 TEST_ELEMENT iq_dump_result[8192] }",
                 schema.describeSpMatch(le32(3), offsets.get("TEST_PDU")));
+            MddbSchema.ResolvedType type = schema.resolveTypeByName("TEST_PDU");
+            assertNotNull(type);
+            assertEquals(8192, type.fields().get(0).arrayCount());
         }
     }
 

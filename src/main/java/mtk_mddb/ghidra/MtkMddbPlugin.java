@@ -113,6 +113,35 @@ public final class MtkMddbPlugin extends ProgramPlugin {
         new TaskLauncher(task, provider.getComponent());
     }
 
+    void importDataType(MddbDatabase database, MddbSearchResult result) {
+        Program program = currentProgram;
+        if (program == null) {
+            Msg.showWarn(this, provider.getComponent(), "MediaTek MDDB", "Open a program first.");
+            return;
+        }
+        Task task = new Task("Import MDDB data type", true, true, true) {
+            @Override
+            public void run(TaskMonitor monitor) {
+                try {
+                    MddbTypeImporter.ImportSummary summary =
+                        MddbTypeImporter.importSelection(program, database, result, monitor);
+                    if (summary.imported().isEmpty()) {
+                        Msg.showInfo(this, provider.getComponent(), "MediaTek MDDB",
+                            "The selected MDDB result does not resolve to a decoded type or enum.");
+                    } else {
+                        Msg.showInfo(this, provider.getComponent(), "MediaTek MDDB",
+                            "Imported into the program data-type manager:\n" +
+                                String.join("\n", summary.imported()));
+                    }
+                } catch (Exception e) {
+                    Msg.showError(this, provider.getComponent(), "MediaTek MDDB",
+                        "Data-type import failed", e);
+                }
+            }
+        };
+        new TaskLauncher(task, provider.getComponent());
+    }
+
     void annotateInProgram(String text) {
         Program program = currentProgram;
         if (program == null) {

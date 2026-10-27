@@ -29,6 +29,10 @@ and opens the RocksDB embedded in <CODE>DATAI</CODE>.</P>
       the first code reference.</LI>
   <LI><B>Annotate Program</B> adds analysis bookmarks and comments to string matches and code
       xrefs, plus an analysis label for identifier-like string names.</LI>
+  <LI><B>Import MDDB Type</B> imports the selected schema-bearing result into the current
+      program data-type manager under <CODE>/MediaTek MDDB</CODE>. Decoded nested structures,
+      arrays, and enums are imported recursively; unsupported field types remain exact-size
+      undefined data rather than being guessed.</LI>
 </UL>
 
 <P>The plugin does not claim that an MDDB entry is a code symbol. Production MediaTek modem
@@ -41,7 +45,10 @@ and an 18-bit byte offset. The standard enum layout handled by the schema browse
 <CODE>type</CODE> column family into tagged <CODE>struct</CODE>/<CODE>union</CODE> records when the
 known layout is present; field offsets, types, names, and validated one-dimensional array counts are
 then displayed in the Schema column. On the tested MT6880 database this exposes the IQ result PDU as
-8192 elements of a four-byte signed-I/Q pair. Generation-specific structures that do not match validated layouts are deliberately left raw rather
-than guessed.</P>
+8192 elements of a four-byte signed-I/Q pair. Importing that result creates a real 32 KiB Ghidra
+structure containing an 8192-element array of a four-byte structure with signed 16-bit
+<CODE>i_data</CODE>/<CODE>q_data</CODE> members. Importing an RF-test command member creates the
+full decoded <CODE>urf_test_cmd_type</CODE> enum. Generation-specific structures that do not match
+validated layouts are deliberately left raw rather than guessed.</P>
 </BODY>
 </HTML>

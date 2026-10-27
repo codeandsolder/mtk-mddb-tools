@@ -12,7 +12,7 @@ CATD
 
 On the tested MT6880 database, `DATAI` reconstructs 18 RocksDB column families including `sp`, `trace`, `type`, `struct`, `enum`, `message`, `file`, `l1module`, `l1filter`, and `nvram`.
 
-The Ghidra plugin is the main interface. It opens an EDB directly, searches the database, decodes the common packed string-reference and enum representation, maps names back into the current program, follows Ghidra xrefs into code, and can annotate those matches.
+The Ghidra plugin is the main interface. It opens an EDB directly, searches the database, decodes the common packed string-reference, enum, struct, union, and array representations, maps names back into the current program, follows Ghidra xrefs into code, imports decoded schemas as real Ghidra data types, and can annotate matching code.
 
 No modem firmware or extracted vendor database content is included in this repository.
 
@@ -47,7 +47,8 @@ The dockable **MediaTek MDDB** browser provides:
 - typedef-chain and tagged struct/union resolution, including field offsets and field types for the common MDDB layout;
 - **Find in Program** for exact firmware string matches;
 - **Go to Code Xref** to jump from a matched firmware string to code using Ghidra's reference database;
-- **Annotate Program** to add analysis labels, comments, and bookmarks at strings and code xrefs.
+- **Annotate Program** to add analysis labels, comments, and bookmarks at strings and code xrefs;
+- **Import MDDB Type** to materialize a selected decoded struct/union or enum in the current program under `/MediaTek MDDB`, recursively importing nested decoded members and preserving validated array counts.
 
 For example, the tested FM350/T700 MDDB decodes:
 
@@ -102,6 +103,8 @@ struct UTSTCnfGetIqDumpResultV3pb {
 
 So the shipping MDDB explicitly describes a result buffer of **8192 complex signed-16-bit I/Q samples**. The array count comes from the array field descriptor (`0x2000`), not from guessing based on the 32 KiB total size.
 
+Selecting that schema result and clicking **Import MDDB Type** creates `/MediaTek MDDB/u_get_iq_dump_result_v3_cnf_pdu_struct` as a real 32 KiB Ghidra structure containing an 8192-element array of the real four-byte `UTSTCnfGetIqDumpResultV3pb` structure. Selecting the IQ command enum member similarly imports `/MediaTek MDDB/urf_test_cmd_type`; on the tested database it contains 105 members, including `0x58` and `0x59`. The importer maps common MediaTek scalar typedefs to Ghidra integer/boolean types and uses exact-size undefined fields for types that have not yet been decoded.
+
 The plugin derives these from MDDB rather than hard-coding the names. Unknown generations or record layouts still stay raw instead of being guessed.
 
 ### Program integration tested on FM350
@@ -111,7 +114,7 @@ Against a fully analyzed nanoMIPS FM350 image, the plugin's bridge from MDDB/deb
 - `dhl_inject_string`: 3 MDDB hits, 4 firmware string occurrences, 1 code xref at `0x9021cb94`;
 - `NL1_RXDFE_TRIGGER_IQ_DUMP`: 2 firmware occurrences and a code xref at `0x90dc52b2`.
 
-The latter string is present in the firmware rather than this particular MDDB build, which is why the database and program searches are intentionally separate but composable.
+The latter string is present in the firmware rather than this particular MDDB build, which is why the database and program searches are intentionally separate but composable. Data-type import was also exercised against a disposable copy of the analyzed FM350 project: Ghidra independently reported a 32,768-byte IQ-result PDU, an 8192-element array with four-byte elements, `i_data`/`q_data` at offsets 0/2, and a 105-member RF-test enum with the expected `0x58`/`0x59` values. The canonical analysis project was not modified by that test.
 
 ## Command-line tools
 

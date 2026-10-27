@@ -30,12 +30,23 @@ final class MddbSchema {
         }
     }
 
-    private record StructField(long offset, String typeName, String fieldName, long arrayCount) {
+    record StructField(long offset, String typeName, String fieldName, long arrayCount) {
         String summary() {
             String suffix = arrayCount > 0 ? "[" + arrayCount + "]" : "";
             return String.format("+0x%x %s %s%s", offset, typeName, fieldName, suffix);
         }
     }
+
+    record ResolvedType(String name, List<String> aliases, String kind, long size, long alignment,
+            List<StructField> fields) {
+        String summary() {
+            return new StructLayout(kind, size, alignment, fields).summary();
+        }
+    }
+
+    record EnumValue(long value, String name) {}
+
+    record EnumDefinition(String name, int size, List<EnumValue> values) {}
 
     private record StructLayout(String kind, long size, long alignment, List<StructField> fields) {
         String summary() {
@@ -65,7 +76,10 @@ final class MddbSchema {
     private final Map<Integer, List<EnumMemberBase>> enumMembersByStringRef = new HashMap<>();
     private final Map<String, String> enumNameCache = new HashMap<>();
     private final Map<Integer, String> typeSummaryCache = new HashMap<>();
+    private final Map<Integer, ResolvedType> typeResolutionCache = new HashMap<>();
+    private final Map<String, Integer> typeRefsByName = new HashMap<>();
     private boolean enumIndexBuilt;
+    private boolean typeNameIndexBuilt;
 
     MddbSchema(RocksDB db, ColumnFamilyHandle sp, ColumnFamilyHandle enums,
             ColumnFamilyHandle types, ColumnFamilyHandle structs) {
@@ -138,9 +152,89 @@ final class MddbSchema {
         return String.join("; ", summaries);
     }
 
+    ResolvedType resolveTypeForSpMatch(byte[] spKey, int offset) throws RocksDBException {
+        if (spKey.length != 4) {
+            return null;
+        }
+        int bucket = u32(spKey, 0);
+        if (bucket < 0 || bucket > 0x3fff || offset < 0 || offset > 0x3ffff) {
+            return null;
+        }
+        return resolveType(stringRef(bucket, offset));
+    }
+
+    ResolvedType resolveTypeByName(String name) throws RocksDBException {
+        ensureTypeNameIndex();
+        Integer ref = typeRefsByName.get(name);
+        return ref == null ? null : resolveType(ref);
+    }
+
+    EnumDefinition resolveEnumByName(String name) throws RocksDBException {
+        ensureTypeNameIndex();
+        Integer ref = typeRefsByName.get(name);
+        if (ref == null) {
+            return null;
+        }
+        Set<Integer> seen = new LinkedHashSet<>();
+        int currentRef = ref;
+        for (int depth = 0; depth < TYPE_CHAIN_LIMIT && seen.add(currentRef); depth++) {
+            byte[] typeRecord = db.get(types, le32(currentRef));
+            if (typeRecord == null || typeRecord.length < 4) {
+                return null;
+            }
+            byte[] target = java.util.Arrays.copyOfRange(typeRecord, typeRecord.length - 4, typeRecord.length);
+            if (db.get(enums, target) != null) {
+                return parseEnumDefinition(target);
+            }
+            int nextRef = u32(target, 0);
+            String nextName = decodeStringRef(nextRef);
+            if (nextName == null || nextName.isBlank()) {
+                return null;
+            }
+            currentRef = nextRef;
+        }
+        return null;
+    }
+
+    List<EnumDefinition> enumDefinitionsForSpMatch(byte[] spKey, int offset) throws RocksDBException {
+        if (spKey.length != 4) {
+            return List.of();
+        }
+        int bucket = u32(spKey, 0);
+        if (bucket < 0 || bucket > 0x3fff || offset < 0 || offset > 0x3ffff) {
+            return List.of();
+        }
+        int ref = stringRef(bucket, offset);
+        ensureEnumIndex();
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        List<EnumDefinition> out = new ArrayList<>();
+        for (EnumMemberBase base : enumMembersByStringRef.getOrDefault(ref, List.of())) {
+            String keyHex = HexFormat.of().formatHex(base.enumRecordKey());
+            if (!seen.add(keyHex)) {
+                continue;
+            }
+            EnumDefinition definition = parseEnumDefinition(base.enumRecordKey());
+            if (definition != null) {
+                out.add(definition);
+            }
+        }
+        return List.copyOf(out);
+    }
+
     private String describeType(int startRef) throws RocksDBException {
         if (typeSummaryCache.containsKey(startRef)) {
             return typeSummaryCache.get(startRef);
+        }
+        ResolvedType resolved = resolveType(startRef);
+        String result = resolved == null ? "" :
+            String.join(" -> ", resolved.aliases()) + ": " + resolved.summary();
+        typeSummaryCache.put(startRef, result);
+        return result;
+    }
+
+    private ResolvedType resolveType(int startRef) throws RocksDBException {
+        if (typeResolutionCache.containsKey(startRef)) {
+            return typeResolutionCache.get(startRef);
         }
 
         List<String> names = new ArrayList<>();
@@ -172,18 +266,84 @@ final class MddbSchema {
         }
 
         if (layout == null) {
-            typeSummaryCache.put(startRef, "");
-            return "";
+            typeResolutionCache.put(startRef, null);
+            return null;
         }
 
         List<String> publicNames = names.stream()
             .filter(name -> !name.startsWith("struct_") && !name.startsWith("union_"))
             .distinct()
             .toList();
-        String prefix = publicNames.isEmpty() ? "" : String.join(" -> ", publicNames) + ": ";
-        String result = prefix + layout.summary();
-        typeSummaryCache.put(startRef, result);
-        return result;
+        String name = publicNames.isEmpty() ? names.get(0) : publicNames.get(0);
+        ResolvedType resolved = new ResolvedType(
+            name, List.copyOf(publicNames.isEmpty() ? names : publicNames),
+            layout.kind(), layout.size(), layout.alignment(), layout.fields());
+        typeResolutionCache.put(startRef, resolved);
+        return resolved;
+    }
+
+    private void ensureTypeNameIndex() throws RocksDBException {
+        if (typeNameIndexBuilt) {
+            return;
+        }
+        try (RocksIterator it = db.newIterator(types)) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                byte[] key = it.key();
+                if (key.length != 4) {
+                    continue;
+                }
+                int ref = u32(key, 0);
+                String name = decodeStringRef(ref);
+                if (name != null && !name.isBlank()) {
+                    typeRefsByName.putIfAbsent(name, ref);
+                }
+            }
+            it.status();
+        }
+        typeNameIndexBuilt = true;
+    }
+
+    private EnumDefinition parseEnumDefinition(byte[] enumRecordKey) throws RocksDBException {
+        byte[] value = db.get(enums, enumRecordKey);
+        if (value == null || value.length < 23 || (value.length - 23) % 8 != 0) {
+            return null;
+        }
+        long count = Integer.toUnsignedLong(u32(value, 19));
+        if (count != (value.length - 23L) / 8L) {
+            return null;
+        }
+        String name = findEnumName(enumRecordKey);
+        if (name == null || name.isBlank()) {
+            name = "enum_" + HexFormat.of().formatHex(enumRecordKey);
+        } else if (name.contains(" | ")) {
+            name = name.substring(0, name.indexOf(" | "));
+        }
+        int size = findEnumSize(enumRecordKey);
+        List<EnumValue> members = new ArrayList<>((int) count);
+        for (int at = 23; at + 8 <= value.length; at += 8) {
+            long enumValue = Integer.toUnsignedLong(u32(value, at));
+            String memberName = decodeStringRef(u32(value, at + 4));
+            if (looksIdentifier(memberName)) {
+                members.add(new EnumValue(enumValue, memberName));
+            }
+        }
+        return new EnumDefinition(name, size, List.copyOf(members));
+    }
+
+    private int findEnumSize(byte[] enumRecordKey) throws RocksDBException {
+        try (RocksIterator it = db.newIterator(types)) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                byte[] value = it.value();
+                if (value.length >= 13 && indexOf(value, enumRecordKey, 0) >= 0) {
+                    long size = Integer.toUnsignedLong(u32(value, 5));
+                    if (size == 1 || size == 2 || size == 4 || size == 8) {
+                        return (int) size;
+                    }
+                }
+            }
+            it.status();
+        }
+        return 4;
     }
 
     private StructLayout findStructLayout(int ref, String name) throws RocksDBException {

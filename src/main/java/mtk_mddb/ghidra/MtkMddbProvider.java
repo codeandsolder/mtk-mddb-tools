@@ -39,6 +39,7 @@ final class MtkMddbProvider extends ComponentProvider {
     private final DefaultTableModel model;
     private final JTable table;
     private volatile MddbDatabase database;
+    private volatile List<DisplayResult> displayedResults = List.of();
     private record DisplayResult(MddbSearchResult match, String schema) {}
 
     MtkMddbProvider(MtkMddbPlugin plugin) {
@@ -73,6 +74,8 @@ final class MtkMddbProvider extends ComponentProvider {
         xref.addActionListener(e -> goToCodeXref());
         JButton annotate = new JButton("Annotate Program");
         annotate.addActionListener(e -> annotateProgram());
+        JButton importType = new JButton("Import MDDB Type");
+        importType.addActionListener(e -> importSelectedType());
         search.add(new JLabel("Search:"));
         search.add(searchField);
         search.add(new JLabel("Column family:"));
@@ -81,6 +84,7 @@ final class MtkMddbProvider extends ComponentProvider {
         search.add(find);
         search.add(xref);
         search.add(annotate);
+        search.add(importType);
 
         JPanel north = new JPanel(new BorderLayout());
         north.add(source, BorderLayout.NORTH);
@@ -130,6 +134,8 @@ final class MtkMddbProvider extends ComponentProvider {
                         old.close();
                     }
                     sourceLabel.setText(path.toString());
+                    displayedResults = List.of();
+                    model.setRowCount(0);
                     columnFamily.removeAllItems();
                     columnFamily.addItem("All");
                     for (String cf : opened.columnFamilies()) {
@@ -173,6 +179,7 @@ final class MtkMddbProvider extends ComponentProvider {
             protected void done() {
                 try {
                     List<DisplayResult> rows = get();
+                    displayedResults = List.copyOf(rows);
                     model.setRowCount(0);
                     int needleLength = needle.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
                     for (DisplayResult row : rows) {
@@ -213,6 +220,26 @@ final class MtkMddbProvider extends ComponentProvider {
         if (text != null && !text.isEmpty()) {
             plugin.annotateInProgram(text);
         }
+    }
+
+    private void importSelectedType() {
+        MddbDatabase db = database;
+        if (db == null) {
+            statusLabel.setText("Open an EDB first.");
+            return;
+        }
+        int selected = table.getSelectedRow();
+        if (selected < 0) {
+            statusLabel.setText("Select a schema-bearing MDDB search result first.");
+            return;
+        }
+        int modelRow = table.convertRowIndexToModel(selected);
+        List<DisplayResult> rows = displayedResults;
+        if (modelRow < 0 || modelRow >= rows.size()) {
+            statusLabel.setText("Selected result is no longer available; search again.");
+            return;
+        }
+        plugin.importDataType(db, rows.get(modelRow).match());
     }
 
     void disposeProvider() {
