@@ -105,7 +105,7 @@ struct UTSTCnfGetIqDumpResultV3pb {
 
 So the shipping MDDB explicitly describes a result buffer of **8192 complex signed-16-bit I/Q samples**. The array count comes from the array field descriptor (`0x2000`), not from guessing based on the 32 KiB total size.
 
-Selecting that schema result and clicking **Import MDDB Type** creates `/MediaTek MDDB/u_get_iq_dump_result_v3_cnf_pdu_struct` as a real 32 KiB Ghidra structure containing an 8192-element array of the real four-byte `UTSTCnfGetIqDumpResultV3pb` structure. Selecting the IQ command enum member similarly imports `/MediaTek MDDB/urf_test_cmd_type`; on the tested database it contains 105 members, including `0x58` and `0x59`. The importer maps common MediaTek scalar typedefs to Ghidra integer/boolean types and uses exact-size undefined fields for types that have not yet been decoded.
+Selecting that schema result and clicking **Import MDDB Type** creates `/MediaTek MDDB/u_get_iq_dump_result_v3_cnf_pdu_struct` as a real 32 KiB Ghidra structure containing an 8192-element array of the real four-byte `UTSTCnfGetIqDumpResultV3pb` structure. Selecting the IQ command enum member similarly imports `/MediaTek MDDB/URfTestCmdType` (the schema browser also exposes `urf_test_cmd_type` as an alias/tag); on the tested database it contains 105 members, including `0x58` and `0x59`. The importer maps common MediaTek scalar typedefs to Ghidra integer/boolean types and uses exact-size undefined fields for types that have not yet been decoded.
 
 The plugin derives these from MDDB rather than hard-coding the names. Unknown generations or record layouts still stay raw instead of being guessed.
 
