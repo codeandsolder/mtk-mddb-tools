@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mtk-mddb-tools"
-version = "0.2.1"
+version = "0.2.2"
 description = "Extract and search MediaTek Catcher/META MDDB .EDB modem databases"
 readme = "README.md"
 requires-python = ">=3.11"
