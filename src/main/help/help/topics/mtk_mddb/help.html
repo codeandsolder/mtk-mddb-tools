@@ -19,7 +19,9 @@ and opens the RocksDB embedded in <CODE>DATAI</CODE>.</P>
   <LI>The <B>Schema</B> column decodes known packed string references and standard enum members, type-alias chains, and common struct/union field descriptors.
       For example, the tested MT6880 database resolves
       <CODE>URF_TEST_CMD_TRIGGER_IQ_DUMP_MODE_V3</CODE> to
-      <CODE>urf_test_cmd_type = 0x58</CODE>.</LI>
+      <CODE>urf_test_cmd_type = 0x58</CODE>, and the outer factory routing enum resolves
+      <CODE>FT_URF_TEST_REQ_ID</CODE>/<CODE>FT_URF_TEST_CNF_ID</CODE> to
+      <CODE>FT_MESSAGE_ID = 0x43/0x44</CODE>.</LI>
 </OL>
 
 <H2>Map database names into code</H2>
@@ -41,7 +43,7 @@ annotations are therefore explicitly marked as MDDB-derived analysis.</P>
 
 <P>The common packed string reference decoded by this plugin uses a 14-bit <CODE>sp</CODE> bucket
 and an 18-bit byte offset. The standard enum layout handled by the schema browser consists of a
-23-byte header followed by value/string-reference pairs. Type aliases are followed through the
+variable header followed by value/string-reference pairs. The plugin recovers the member-table boundary structurally instead of assuming one header size; the tested database includes 23-, 27-, 35-, and 55-byte variants. Type aliases are followed through the
 <CODE>type</CODE> column family into tagged <CODE>struct</CODE>/<CODE>union</CODE> records when the
 known layout is present; field offsets, types, names, and validated one-dimensional array counts are
 then displayed in the Schema column. On the tested MT6880 database this exposes the IQ result PDU as

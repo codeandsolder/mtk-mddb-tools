@@ -65,6 +65,58 @@ class MddbSchemaTest {
     }
 
     @Test
+    void resolvesThirtyFiveByteEnumHeaderAndRejectsHeaderPseudoMember() throws Exception {
+        try (Options options = new Options().setCreateIfMissing(true);
+             RocksDB db = RocksDB.open(options, tempDir.resolve("enum-35-db").toString());
+             ColumnFamilyHandle sp = db.createColumnFamily(cf("sp"));
+             ColumnFamilyHandle enums = db.createColumnFamily(cf("enum"));
+             ColumnFamilyHandle types = db.createColumnFamily(cf("type"));
+             ColumnFamilyHandle structs = db.createColumnFamily(cf("struct"))) {
+
+            Map<String, Integer> offsets = new LinkedHashMap<>();
+            ByteArrayOutputStream pool = new ByteArrayOutputStream();
+            for (String value : new String[] {
+                    "TEST_REQ_ID", "TEST_CNF_ID", "TEST_OTHER_ID", "TEST_MESSAGE_ID"}) {
+                offsets.put(value, pool.size());
+                pool.writeBytes(value.getBytes(StandardCharsets.UTF_8));
+                pool.write(0);
+            }
+            db.put(sp, le32(4), pool.toByteArray());
+
+            int reqRef = packStringRef(4, offsets.get("TEST_REQ_ID"));
+            int cnfRef = packStringRef(4, offsets.get("TEST_CNF_ID"));
+            int otherRef = packStringRef(4, offsets.get("TEST_OTHER_ID"));
+            int enumNameRef = packStringRef(4, offsets.get("TEST_MESSAGE_ID"));
+
+            byte[] enumKey = le32(0x40);
+            ByteBuffer enumRecord = ByteBuffer.allocate(35 + 3 * 8).order(ByteOrder.LITTLE_ENDIAN);
+            // Offset 23 deliberately looks like a second structural candidate: a false
+            // 27-byte header with four members. Its first pseudo-member string ref is the
+            // real count word at offset 31, so identifier scoring must prefer offset 35.
+            enumRecord.putInt(23, 4);
+            enumRecord.putInt(31, 3);
+            enumRecord.position(35)
+                .putInt(0x43).putInt(reqRef)
+                .putInt(0x44).putInt(cnfRef)
+                .putInt(0x45).putInt(otherRef);
+            db.put(enums, enumKey, enumRecord.array());
+
+            byte[] typeKey = le32(enumNameRef);
+            db.put(types, typeKey, enumKey);
+
+            MddbSchema schema = new MddbSchema(db, sp, enums, types, structs);
+            assertEquals("TEST_MESSAGE_ID = 0x43",
+                schema.describeSpMatch(le32(4), offsets.get("TEST_REQ_ID")));
+            MddbSchema.EnumDefinition definition = schema.resolveEnumByName("TEST_MESSAGE_ID");
+            assertNotNull(definition);
+            assertEquals(List.of(
+                new MddbSchema.EnumValue(0x43, "TEST_REQ_ID"),
+                new MddbSchema.EnumValue(0x44, "TEST_CNF_ID"),
+                new MddbSchema.EnumValue(0x45, "TEST_OTHER_ID")), definition.values());
+        }
+    }
+
+    @Test
     void resolvesTypeAliasesAndStructFields() throws Exception {
         try (Options options = new Options().setCreateIfMissing(true);
              RocksDB db = RocksDB.open(options, tempDir.resolve("struct-db").toString());

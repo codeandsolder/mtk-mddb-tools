@@ -42,7 +42,7 @@ The dockable **MediaTek MDDB** browser provides:
 - read-only search across all column families or one selected family;
 - readable context around binary RocksDB values;
 - MediaTek packed string-pool reference decoding (`14-bit bucket + 18-bit byte offset`);
-- decoding of the standard MDDB enum record layout;
+- structural discovery and decoding of the MDDB enum member table across the observed header variants;
 - enum/type-name backreferences where the database exposes them;
 - typedef-chain and tagged struct/union resolution, including field offsets and field types for the common MDDB layout;
 - **Find in Program** for exact firmware string matches;
@@ -56,6 +56,8 @@ For example, the tested FM350/T700 MDDB decodes:
 urf_test_cmd_type = 0x58  URF_TEST_CMD_TRIGGER_IQ_DUMP_MODE_V3
 urf_test_cmd_type = 0x59  URF_TEST_CMD_GET_IQ_DUMP_RESULT_V3
 urf_test_cmd_type = 0x28  URF_TEST_CMD_SET_RX_ANTENNA
+FT_MESSAGE_ID = 0x43     FT_URF_TEST_REQ_ID
+FT_MESSAGE_ID = 0x44     FT_URF_TEST_CNF_ID
 ```
 
 The same database exposes the corresponding request/confirmation vocabulary, including:
@@ -165,7 +167,7 @@ Currently decoded and validated:
 - reconstruction of the embedded RocksDB directory;
 - all RocksDB column families in raw read-only mode;
 - the `sp` pool's packed `14-bit bucket + 18-bit byte offset` references;
-- the standard enum representation used by `urf_test_cmd_type`: a 23-byte header followed by `count × (u32 value, u32 string_ref)`;
+- enum member tables as `count × (u32 value, u32 string_ref)`, with the table boundary recovered structurally rather than assuming one header size (the tested database uses 23-, 27-, 35-, and 55-byte variants);
 - reverse links from enum record → type record → exposed enum/type names when present;
 - type-alias chains whose packed string refs are themselves `type` keys;
 - tagged struct/union keys (`0x61 || string_ref` / `0x62 || string_ref`) and the common field descriptors used by the tested MT6880 database.

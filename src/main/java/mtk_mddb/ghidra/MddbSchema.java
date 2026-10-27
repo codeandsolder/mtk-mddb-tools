@@ -23,6 +23,8 @@ final class MddbSchema {
 
     private record EnumMemberBase(byte[] enumRecordKey, long value) {}
 
+    private record EnumLayout(int membersOffset, int count) {}
+
     record EnumMember(String enumName, long value, String memberName, String enumRecordKey) {
         String summary() {
             String prefix = enumName == null || enumName.isBlank() ? "enum " + enumRecordKey : enumName;
@@ -305,11 +307,8 @@ final class MddbSchema {
 
     private EnumDefinition parseEnumDefinition(byte[] enumRecordKey) throws RocksDBException {
         byte[] value = db.get(enums, enumRecordKey);
-        if (value == null || value.length < 23 || (value.length - 23) % 8 != 0) {
-            return null;
-        }
-        long count = Integer.toUnsignedLong(u32(value, 19));
-        if (count != (value.length - 23L) / 8L) {
+        EnumLayout layout = findEnumLayout(value);
+        if (layout == null) {
             return null;
         }
         String name = findEnumName(enumRecordKey);
@@ -319,8 +318,8 @@ final class MddbSchema {
             name = name.substring(0, name.indexOf(" | "));
         }
         int size = findEnumSize(enumRecordKey);
-        List<EnumValue> members = new ArrayList<>((int) count);
-        for (int at = 23; at + 8 <= value.length; at += 8) {
+        List<EnumValue> members = new ArrayList<>(layout.count());
+        for (int at = layout.membersOffset(); at + 8 <= value.length; at += 8) {
             long enumValue = Integer.toUnsignedLong(u32(value, at));
             String memberName = decodeStringRef(u32(value, at + 4));
             if (looksIdentifier(memberName)) {
@@ -328,6 +327,46 @@ final class MddbSchema {
             }
         }
         return new EnumDefinition(name, size, List.copyOf(members));
+    }
+
+    private EnumLayout findEnumLayout(byte[] value) throws RocksDBException {
+        if (value == null || value.length < 4) {
+            return null;
+        }
+        List<EnumLayout> candidates = new ArrayList<>();
+        for (int membersOffset = 4; membersOffset <= value.length; membersOffset++) {
+            int payloadBytes = value.length - membersOffset;
+            if ((payloadBytes & 7) != 0) {
+                continue;
+            }
+            int count = payloadBytes / 8;
+            if (Integer.toUnsignedLong(u32(value, membersOffset - 4)) == count) {
+                candidates.add(new EnumLayout(membersOffset, count));
+            }
+        }
+        if (candidates.size() <= 1) {
+            return candidates.isEmpty() ? null : candidates.get(0);
+        }
+
+        EnumLayout best = null;
+        int bestIdentifiers = -1;
+        for (EnumLayout candidate : candidates) {
+            int identifiers = 0;
+            int sampleCount = Math.min(candidate.count(), 8);
+            for (int i = 0; i < sampleCount; i++) {
+                int at = candidate.membersOffset() + i * 8;
+                if (looksIdentifier(decodeStringRef(u32(value, at + 4)))) {
+                    identifiers++;
+                }
+            }
+            if (identifiers > bestIdentifiers ||
+                    (identifiers == bestIdentifiers &&
+                        (best == null || candidate.membersOffset() > best.membersOffset()))) {
+                best = candidate;
+                bestIdentifiers = identifiers;
+            }
+        }
+        return best;
     }
 
     private int findEnumSize(byte[] enumRecordKey) throws RocksDBException {
@@ -423,15 +462,12 @@ final class MddbSchema {
         try (RocksIterator it = db.newIterator(enums)) {
             for (it.seekToFirst(); it.isValid(); it.next()) {
                 byte[] value = it.value();
-                if (value.length < 23 || (value.length - 23) % 8 != 0) {
-                    continue;
-                }
-                long count = Integer.toUnsignedLong(u32(value, 19));
-                if (count != (value.length - 23L) / 8L) {
+                EnumLayout layout = findEnumLayout(value);
+                if (layout == null) {
                     continue;
                 }
                 byte[] enumKey = it.key().clone();
-                for (int at = 23; at + 8 <= value.length; at += 8) {
+                for (int at = layout.membersOffset(); at + 8 <= value.length; at += 8) {
                     long enumValue = Integer.toUnsignedLong(u32(value, at));
                     int ref = u32(value, at + 4);
                     enumMembersByStringRef.computeIfAbsent(ref, ignored -> new ArrayList<>())
@@ -454,6 +490,12 @@ final class MddbSchema {
                 byte[] typeKey = typeIt.key();
                 if (indexOf(typeIt.value(), enumRecordKey, 0) < 0) {
                     continue;
+                }
+                if (typeKey.length == 4) {
+                    String directName = decodeStringRef(u32(typeKey, 0));
+                    if (looksIdentifier(directName)) {
+                        names.add(directName);
+                    }
                 }
                 findNamesFollowingTypeKey(typeKey, names);
             }
