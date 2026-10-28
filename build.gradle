@@ -37,3 +37,21 @@ for (pattern in [
 ]) {
     buildExtension.exclude pattern
 }
+
+// Ghidra scripts are source-loaded at runtime and are not part of the extension main source set.
+// Compile them explicitly so API drift and syntax errors fail CI before a release is packaged.
+tasks.register("compileGhidraScripts", JavaCompile) {
+    source = fileTree("ghidra_scripts") { include "**/*.java" }
+    classpath = sourceSets.main.compileClasspath + sourceSets.main.output
+    destinationDirectory = layout.buildDirectory.dir("ghidra-script-classes")
+    options.encoding = "UTF-8"
+}
+
+tasks.named("check") { dependsOn "compileGhidraScripts" }
+tasks.named("buildExtension") {
+    dependsOn "compileGhidraScripts"
+    // Ghidra caches compiled ghidra_scripts by source path/mtime. Gradle's reproducible
+    // ZIP timestamp (1980) can therefore leave stale script bytecode after an in-place
+    // extension upgrade. Preserve source mtimes so changed scripts are recompiled.
+    preserveFileTimestamps = true
+}

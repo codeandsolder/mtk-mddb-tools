@@ -7,7 +7,10 @@ import java.awt.event.MouseEvent;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -39,6 +42,7 @@ final class MtkMddbProvider extends ComponentProvider {
     private final DefaultTableModel model;
     private final JTable table;
     private volatile MddbDatabase database;
+    private volatile Path databasePath;
     private volatile List<DisplayResult> displayedResults = List.of();
     private record DisplayResult(MddbSearchResult match, String schema) {}
 
@@ -62,6 +66,9 @@ final class MtkMddbProvider extends ComponentProvider {
         JButton open = new JButton("Open EDB...");
         open.addActionListener(e -> chooseAndOpen());
         source.add(open);
+        JButton compare = new JButton("Compare EDB...");
+        compare.addActionListener(e -> chooseAndCompare());
+        source.add(compare);
         source.add(sourceLabel);
 
         JPanel search = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -104,6 +111,89 @@ final class MtkMddbProvider extends ComponentProvider {
         });
     }
 
+    private void chooseAndCompare() {
+        Path sourcePath = databasePath;
+        if (sourcePath == null) {
+            statusLabel.setText("Open the source EDB first.");
+            return;
+        }
+        GhidraFileChooser chooser = new GhidraFileChooser(panel);
+        chooser.setFileSelectionMode(GhidraFileChooserMode.FILES_AND_DIRECTORIES);
+        chooser.setApproveButtonText("Compare MDDB");
+        File selected = chooser.getSelectedFile();
+        chooser.dispose();
+        if (selected == null) {
+            return;
+        }
+        Path path = selected.toPath();
+        statusLabel.setText("Comparing against " + path + " ...");
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() throws Exception {
+                // Own both handles: the provider may replace/close its interactive database while
+                // this worker is still running.
+                try (MddbDatabase left = MddbDatabase.open(sourcePath);
+                     MddbDatabase right = MddbDatabase.open(path)) {
+                    StringBuilder summary = new StringBuilder();
+                    summary.append("Column family\tleft\tright\tcommon\tidentical\tchanged\tonly-left\tonly-right\n");
+                    for (Map.Entry<String, MddbDatabase.ColumnFamilyDiff> entry :
+                            left.compareRaw(right).entrySet()) {
+                        MddbDatabase.ColumnFamilyDiff d = entry.getValue();
+                        summary.append(entry.getKey()).append("\t")
+                            .append(d.leftRecords()).append("\t")
+                            .append(d.rightRecords()).append("\t")
+                            .append(d.commonKeys()).append("\t")
+                            .append(d.identicalValues()).append("\t")
+                            .append(d.changedValues()).append("\t")
+                            .append(d.onlyLeft()).append("\t")
+                            .append(d.onlyRight()).append("\n");
+                    }
+                    Set<String> leftStrings = left.stringPoolStrings(4, 256);
+                    Set<String> rightStrings = right.stringPoolStrings(4, 256);
+                    Set<String> common = new HashSet<>(leftStrings);
+                    common.retainAll(rightStrings);
+                    summary.append("\nString-pool vocabulary: left=")
+                        .append(leftStrings.size()).append(", right=")
+                        .append(rightStrings.size()).append(", common=")
+                        .append(common.size()).append(", only-left=")
+                        .append(leftStrings.size() - common.size()).append(", only-right=")
+                        .append(rightStrings.size() - common.size());
+                    MddbDatabase.SemanticEnumDiff enums = left.compareSemanticEnums(right);
+                    summary.append("\nSemantic enums: left=").append(enums.leftEnums())
+                        .append(", right=").append(enums.rightEnums())
+                        .append(", common=").append(enums.commonNames())
+                        .append(", identical=").append(enums.identicalEnums())
+                        .append(", changed=").append(enums.changedEnums())
+                        .append(", only-left=").append(enums.onlyLeft())
+                        .append(", only-right=").append(enums.onlyRight());
+                    if (!enums.changedNames().isEmpty()) {
+                        int previewCount = Math.min(50, enums.changedNames().size());
+                        summary.append("\nChanged enum ABIs: ")
+                            .append(String.join(", ", enums.changedNames().subList(0, previewCount)));
+                        if (previewCount < enums.changedNames().size()) {
+                            summary.append(" ... +")
+                                .append(enums.changedNames().size() - previewCount)
+                                .append(" more; export a cross-build TSV for the full list");
+                        }
+                    }
+                    return summary.toString();
+                }
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    String summary = get();
+                    statusLabel.setText("Comparison complete: " + path);
+                    Msg.showInfo(this, panel, "MediaTek MDDB comparison", summary);
+                } catch (Exception e) {
+                    statusLabel.setText("Comparison failed: " + e.getMessage());
+                    Msg.showError(this, panel, "MediaTek MDDB", "Comparison failed", e);
+                }
+            }
+        }.execute();
+    }
+
     void chooseAndOpen() {
         GhidraFileChooser chooser = new GhidraFileChooser(panel);
         chooser.setFileSelectionMode(GhidraFileChooserMode.FILES_AND_DIRECTORIES);
@@ -130,6 +220,7 @@ final class MtkMddbProvider extends ComponentProvider {
                     MddbDatabase opened = get();
                     MddbDatabase old = database;
                     database = opened;
+                    databasePath = path;
                     if (old != null) {
                         old.close();
                     }
@@ -245,6 +336,7 @@ final class MtkMddbProvider extends ComponentProvider {
     void disposeProvider() {
         MddbDatabase db = database;
         database = null;
+        databasePath = null;
         if (db != null) {
             try {
                 db.close();

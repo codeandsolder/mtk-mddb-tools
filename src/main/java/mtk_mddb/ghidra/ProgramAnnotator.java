@@ -32,20 +32,22 @@ public final class ProgramAnnotator {
             return List.of();
         }
         Memory memory = program.getMemory();
-        Address cursor = memory.getMinAddress();
-        Address max = memory.getMaxAddress();
         List<Address> hits = new ArrayList<>();
-        while (cursor != null && cursor.compareTo(max) <= 0) {
-            monitor.checkCancelled();
-            Address hit = memory.findBytes(cursor, max, needle, null, true, monitor);
-            if (hit == null) {
-                break;
-            }
-            hits.add(hit);
-            try {
-                cursor = hit.add(1);
-            } catch (RuntimeException e) {
-                break;
+        for (var block : ProgramComparisonScope.blocks(program)) {
+            Address cursor = block.getStart();
+            Address max = block.getEnd();
+            while (cursor != null && cursor.compareTo(max) <= 0) {
+                monitor.checkCancelled();
+                Address hit = memory.findBytes(cursor, max, needle, null, true, monitor);
+                if (hit == null) {
+                    break;
+                }
+                hits.add(hit);
+                try {
+                    cursor = hit.add(1);
+                } catch (RuntimeException e) {
+                    break;
+                }
             }
         }
         return hits;
@@ -56,14 +58,16 @@ public final class ProgramAnnotator {
         LinkedHashSet<Address> refs = new LinkedHashSet<>();
         for (Address hit : findAscii(program, text, monitor)) {
             monitor.checkCancelled();
-            ReferenceIterator iterator = program.getReferenceManager().getReferencesTo(hit);
-            while (iterator.hasNext()) {
-                monitor.checkCancelled();
-                Reference ref = iterator.next();
-                Address from = ref.getFromAddress();
-                if (program.getListing().getInstructionContaining(from) != null ||
-                        program.getFunctionManager().getFunctionContaining(from) != null) {
-                    refs.add(from);
+            for (Address target : ProgramComparisonScope.equivalentAddresses(program, hit)) {
+                ReferenceIterator iterator = program.getReferenceManager().getReferencesTo(target);
+                while (iterator.hasNext()) {
+                    monitor.checkCancelled();
+                    Reference ref = iterator.next();
+                    Address from = ref.getFromAddress();
+                    if (program.getListing().getInstructionContaining(from) != null ||
+                            program.getFunctionManager().getFunctionContaining(from) != null) {
+                        refs.add(from);
+                    }
                 }
             }
         }
@@ -97,24 +101,26 @@ public final class ProgramAnnotator {
                     }
                 }
 
-                ReferenceIterator iterator = program.getReferenceManager().getReferencesTo(hit);
-                while (iterator.hasNext()) {
-                    monitor.checkCancelled();
-                    Reference ref = iterator.next();
-                    Address from = ref.getFromAddress();
-                    if (program.getListing().getInstructionContaining(from) == null &&
-                            program.getFunctionManager().getFunctionContaining(from) == null) {
-                        continue;
-                    }
-                    if (codeRefs.add(from)) {
-                        String xrefComment = "MediaTek MDDB xref: " + text;
-                        program.getBookmarkManager().setBookmark(
-                            from, BookmarkType.ANALYSIS, "MediaTek MDDB xref", xrefComment);
-                        appendComment(program, from, xrefComment);
-                    }
-                    Function function = program.getFunctionManager().getFunctionContaining(from);
-                    if (function != null) {
-                        functionNames.add(function.getName() + " @ " + function.getEntryPoint());
+                for (Address target : ProgramComparisonScope.equivalentAddresses(program, hit)) {
+                    ReferenceIterator iterator = program.getReferenceManager().getReferencesTo(target);
+                    while (iterator.hasNext()) {
+                        monitor.checkCancelled();
+                        Reference ref = iterator.next();
+                        Address from = ref.getFromAddress();
+                        if (program.getListing().getInstructionContaining(from) == null &&
+                                program.getFunctionManager().getFunctionContaining(from) == null) {
+                            continue;
+                        }
+                        if (codeRefs.add(from)) {
+                            String xrefComment = "MediaTek MDDB xref: " + text;
+                            program.getBookmarkManager().setBookmark(
+                                from, BookmarkType.ANALYSIS, "MediaTek MDDB xref", xrefComment);
+                            appendComment(program, from, xrefComment);
+                        }
+                        Function function = program.getFunctionManager().getFunctionContaining(from);
+                        if (function != null) {
+                            functionNames.add(function.getName() + " @ " + function.getEntryPoint());
+                        }
                     }
                 }
             }

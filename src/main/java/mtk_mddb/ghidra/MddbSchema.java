@@ -171,6 +171,78 @@ final class MddbSchema {
         return ref == null ? null : resolveType(ref);
     }
 
+    Map<String, String> semanticEnumSignatures() throws RocksDBException {
+        ensureTypeNameIndex();
+        Map<String, String> out = new java.util.TreeMap<>();
+        for (Map.Entry<String, Integer> entry : typeRefsByName.entrySet()) {
+            EnumDefinition definition = resolveEnumByRef(entry.getValue(), entry.getKey());
+            if (definition == null) {
+                continue;
+            }
+            List<EnumValue> values = new ArrayList<>(definition.values());
+            values.sort((left, right) -> {
+                int byValue = Long.compareUnsigned(left.value(), right.value());
+                return byValue != 0 ? byValue : left.name().compareTo(right.name());
+            });
+            StringBuilder signature = new StringBuilder();
+            signature.append(definition.size()).append(":");
+            for (EnumValue value : values) {
+                signature.append(Long.toUnsignedString(value.value(), 16))
+                    .append("=").append(value.name()).append(";");
+            }
+            out.put(entry.getKey(), signature.toString());
+        }
+        return java.util.Collections.unmodifiableMap(out);
+    }
+
+    private EnumDefinition resolveEnumByRef(int startRef, String publicName)
+            throws RocksDBException {
+        Set<Integer> seen = new LinkedHashSet<>();
+        int currentRef = startRef;
+        int size = 4;
+        for (int depth = 0; depth < TYPE_CHAIN_LIMIT && seen.add(currentRef); depth++) {
+            byte[] typeRecord = db.get(types, le32(currentRef));
+            if (typeRecord == null || typeRecord.length < 4) {
+                return null;
+            }
+            if (typeRecord.length >= 13) {
+                long candidate = Integer.toUnsignedLong(u32(typeRecord, 5));
+                if (candidate == 1 || candidate == 2 || candidate == 4 || candidate == 8) {
+                    size = (int) candidate;
+                }
+            }
+            byte[] target = java.util.Arrays.copyOfRange(
+                typeRecord, typeRecord.length - 4, typeRecord.length);
+            byte[] enumRecord = db.get(enums, target);
+            if (enumRecord != null) {
+                return parseEnumDefinition(enumRecord, publicName, size);
+            }
+            int nextRef = u32(target, 0);
+            if (decodeStringRef(nextRef) == null) {
+                return null;
+            }
+            currentRef = nextRef;
+        }
+        return null;
+    }
+
+    private EnumDefinition parseEnumDefinition(byte[] value, String name, int size)
+            throws RocksDBException {
+        EnumLayout layout = findEnumLayout(value);
+        if (layout == null) {
+            return null;
+        }
+        List<EnumValue> members = new ArrayList<>(layout.count());
+        for (int at = layout.membersOffset(); at + 8 <= value.length; at += 8) {
+            long enumValue = Integer.toUnsignedLong(u32(value, at));
+            String memberName = decodeStringRef(u32(value, at + 4));
+            if (looksIdentifier(memberName)) {
+                members.add(new EnumValue(enumValue, memberName));
+            }
+        }
+        return new EnumDefinition(name, size, List.copyOf(members));
+    }
+
     EnumDefinition resolveEnumByName(String name) throws RocksDBException {
         ensureTypeNameIndex();
         Integer ref = typeRefsByName.get(name);
