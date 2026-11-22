@@ -19,7 +19,7 @@ def detectRocksPlatform = {
     if (os.contains("linux")) return "linux64"
     throw new GradleException("Unsupported build host: specify -ProcksdbPlatform explicitly")
 }
-def rocksPlatform = providers.gradleProperty("rocksdbPlatform").orNull ?: detectRocksPlatform()
+def rocksPlatform = providers.gradleProperty("rocksdbPlatform").orElse(providers.provider { detectRocksPlatform() }).get()
 if (!(rocksPlatform in ["linux64", "win64", "osx"])) {
     throw new GradleException("Unknown RocksDB platform: " + rocksPlatform)
 }
@@ -77,7 +77,7 @@ tasks.register("compileGhidraScripts", JavaCompile) {
 tasks.named("check") { dependsOn "compileGhidraScripts" }
 def extensionArchive = tasks.named("buildExtension", Zip) {
     dependsOn "compileGhidraScripts"
-    archiveFileName.set("mtk-mddb-tools-ghidra-${project.ext.ghidra_version}-${rocksPlatform}.zip")
+    archiveBaseName.set("mtk-mddb-tools-ghidra-${project.ext.ghidra_version}-${rocksPlatform}")
     // Ghidra caches compiled ghidra_scripts by source path/mtime. Gradle's reproducible
     // ZIP timestamp (1980) can therefore leave stale script bytecode after an in-place
     // extension upgrade. Preserve source mtimes so changed scripts are recompiled.
@@ -115,3 +115,6 @@ tasks.register("packageExtension") {
         logger.lifecycle("Verified ${archive} (${archive.length()} bytes)")
     }
 }
+
+// Preserve Gradle's native default invocation, including artifact verification.
+defaultTasks "packageExtension"
