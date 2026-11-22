@@ -1,30 +1,57 @@
-def ghidraInstallDir
-if (System.env.GHIDRA_INSTALL_DIR) {
-    ghidraInstallDir = System.env.GHIDRA_INSTALL_DIR
-} else if (project.hasProperty("GHIDRA_INSTALL_DIR")) {
-    ghidraInstallDir = project.getProperty("GHIDRA_INSTALL_DIR")
-}
+import java.util.zip.ZipFile
+
+def ghidraInstallDir = providers.gradleProperty("ghidraInstallDir").orNull
 if (!ghidraInstallDir) {
-    throw new GradleException("GHIDRA_INSTALL_DIR is not defined")
+    throw new GradleException("Specify -PghidraInstallDir=/path/to/ghidra")
 }
-apply from: new File(ghidraInstallDir).getCanonicalPath() + "/support/buildExtension.gradle"
+def ghidraBuild = new File(ghidraInstallDir, "support/buildExtension.gradle").canonicalFile
+if (!ghidraBuild.isFile()) {
+    throw new GradleException("Not a Ghidra distribution: " + ghidraBuild.parentFile.parentFile)
+}
+apply from: ghidraBuild
 
 repositories { mavenCentral() }
 
 def detectRocksPlatform = {
-    def os = System.getProperty("os.name").toLowerCase()
+    def os = System.getProperty("os.name").toLowerCase(Locale.ROOT)
     if (os.contains("win")) return "win64"
     if (os.contains("mac") || os.contains("darwin")) return "osx"
-    return "linux64"
+    if (os.contains("linux")) return "linux64"
+    throw new GradleException("Unsupported build host: specify -ProcksdbPlatform explicitly")
 }
-def rocksPlatform = project.findProperty("rocksdbPlatform") ?: System.getenv("ROCKSDB_PLATFORM") ?: detectRocksPlatform()
+def rocksPlatform = providers.gradleProperty("rocksdbPlatform").orNull ?: detectRocksPlatform()
+if (!(rocksPlatform in ["linux64", "win64", "osx"])) {
+    throw new GradleException("Unknown RocksDB platform: " + rocksPlatform)
+}
+
+// The upstream extension task packages project lib/. Keep that directory
+// generated from the exact selected dependencies rather than appending jars
+// from previous platform builds. Resolve from our declared libraries, not
+// runtimeClasspath, which also contains the SDK and the staged lib directory.
+def bundledLibraries = configurations.create("bundledLibraries") {
+    canBeConsumed = false
+    canBeResolved = true
+}
+configurations.implementation.extendsFrom(bundledLibraries)
+
 
 dependencies {
-    implementation "org.tukaani:xz:1.10"
-    implementation "org.rocksdb:rocksdbjni:11.1.1:${rocksPlatform}"
+    add("bundledLibraries", "org.tukaani:xz:1.10")
+    add("bundledLibraries", "org.rocksdb:rocksdbjni:11.1.1:${rocksPlatform}")
     testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher:1.11.4"
 }
+
+def stageExtensionLibraries = tasks.register("stageExtensionLibraries", Sync) {
+    from bundledLibraries
+    into layout.projectDirectory.dir("lib")
+}
+tasks.named("copyDependencies") {
+    // Ghidra's default Copy task accumulates dependencies from prior builds.
+    enabled = false
+}
+tasks.named("compileJava") { dependsOn stageExtensionLibraries }
+tasks.named("buildExtension") { dependsOn stageExtensionLibraries }
 
 test {
     useJUnitPlatform()
@@ -48,10 +75,43 @@ tasks.register("compileGhidraScripts", JavaCompile) {
 }
 
 tasks.named("check") { dependsOn "compileGhidraScripts" }
-tasks.named("buildExtension") {
+def extensionArchive = tasks.named("buildExtension", Zip) {
     dependsOn "compileGhidraScripts"
+    archiveFileName.set("mtk-mddb-tools-ghidra-${project.ext.ghidra_version}-${rocksPlatform}.zip")
     // Ghidra caches compiled ghidra_scripts by source path/mtime. Gradle's reproducible
     // ZIP timestamp (1980) can therefore leave stale script bytecode after an in-place
     // extension upgrade. Preserve source mtimes so changed scripts are recompiled.
     preserveFileTimestamps = true
+}
+
+
+// Validate the exact Gradle task output; never search dist/ for an older ZIP.
+tasks.register("packageExtension") {
+    group = "build"
+    description = "Build and verify the selected platform extension archive"
+    dependsOn extensionArchive
+    inputs.file extensionArchive.flatMap { it.archiveFile }
+    doLast {
+        def archive = extensionArchive.get().archiveFile.get().asFile
+        if (archive.length() > 80L * 1024 * 1024) {
+            throw new GradleException("Unexpectedly large extension: " + archive)
+        }
+        def expected = bundledLibraries.files.collect { it.name }.toSet()
+        new ZipFile(archive).withCloseable { zip ->
+            def names = zip.entries().collect { it.name }
+            if (names.any { it.split("/").any { part -> part in [".cache", ".gradle", ".venv"] } }) {
+                throw new GradleException("Extension contains a build/cache directory: " + archive)
+            }
+            def packaged = names.findAll { it.startsWith("${project.name}/lib/") }
+                .collect { it.split("/")[-1] }
+            if (!expected.every { packaged.count(it) == 1 }) {
+                throw new GradleException("Extension is missing or duplicates a selected dependency: " + archive)
+            }
+            def rocks = packaged.findAll { it.startsWith("rocksdbjni-") && it.endsWith(".jar") }
+            if (rocks.size() != 1 || !expected.contains(rocks[0])) {
+                throw new GradleException("Extension contains an unexpected RocksDB runtime: " + rocks)
+            }
+        }
+        logger.lifecycle("Verified ${archive} (${archive.length()} bytes)")
+    }
 }

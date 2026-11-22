@@ -221,8 +221,7 @@ Build the Ghidra extension against an installed Ghidra 12.2:
 
 ```bash
 export JAVA_HOME=/path/to/jdk-25
-export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
-./scripts/build_ghidra_extension.sh linux64
+./gradlew packageExtension --no-daemon -PghidraInstallDir=/path/to/ghidra_12.2_PUBLIC -ProcksdbPlatform=linux64
 ```
 
-Pass `linux64`, `win64`, or `osx`; multiple platforms may be supplied to build release artifacts in one invocation.
+Select `linux64`, `win64`, or `osx` with the Gradle property (default: host platform). Invoke the same task separately for each release platform; Gradle synchronizes the generated `lib/` directory and verifies the exact output in `dist/`. No manual clean or archive renaming is required. The Ghidra distribution is selected through the explicit `-PghidraInstallDir` property.

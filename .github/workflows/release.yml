@@ -43,13 +43,12 @@ jobs:
       - name: Build Python package
         run: uv build
       - name: Run Java parser tests
-        env:
-          GHIDRA_INSTALL_DIR: ${{ github.workspace }}/.cache/ghidra_12.2_PUBLIC
-        run: ./gradlew test --no-daemon -ProcksdbPlatform=linux64
+        run: ./gradlew test --no-daemon -PghidraInstallDir="$GITHUB_WORKSPACE/.cache/ghidra_12.2_PUBLIC" -ProcksdbPlatform=linux64
       - name: Build Ghidra platform artifacts
-        env:
-          GHIDRA_INSTALL_DIR: ${{ github.workspace }}/.cache/ghidra_12.2_PUBLIC
-        run: ./scripts/build_ghidra_extension.sh linux64 win64 osx
+        run: |
+          for platform in linux64 win64 osx; do
+            ./gradlew packageExtension --no-daemon -PghidraInstallDir="$GITHUB_WORKSPACE/.cache/ghidra_12.2_PUBLIC" -ProcksdbPlatform="$platform"
+          done
       - name: Generate checksums
         run: |
           cd dist

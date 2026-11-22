@@ -57,13 +57,9 @@ jobs:
           mv ghidra_12.2_PUBLIC .cache/ghidra_12.2_PUBLIC
           rm "$GHIDRA_ZIP"
       - name: Run Java parser tests
-        env:
-          GHIDRA_INSTALL_DIR: ${{ github.workspace }}/.cache/ghidra_12.2_PUBLIC
-        run: ./gradlew test --no-daemon -ProcksdbPlatform=linux64
+        run: ./gradlew test --no-daemon -PghidraInstallDir="$GITHUB_WORKSPACE/.cache/ghidra_12.2_PUBLIC" -ProcksdbPlatform=linux64
       - name: Compile and package extension
-        env:
-          GHIDRA_INSTALL_DIR: ${{ github.workspace }}/.cache/ghidra_12.2_PUBLIC
-        run: ./scripts/build_ghidra_extension.sh linux64
+        run: ./gradlew packageExtension --no-daemon -PghidraInstallDir="$GITHUB_WORKSPACE/.cache/ghidra_12.2_PUBLIC" -ProcksdbPlatform=linux64
       - uses: actions/upload-artifact@v7
         with:
           name: ghidra-extension-linux64
