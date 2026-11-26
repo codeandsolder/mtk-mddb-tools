@@ -1,5 +1,8 @@
 # mtk-mddb-tools
 
+> [!IMPORTANT]
+> **Now maintained in [ghidra-wwan-modem-tools](https://github.com/codeandsolder/ghidra-wwan-modem-tools).** The [MediaTek extension](https://github.com/codeandsolder/ghidra-wwan-modem-tools/tree/main/mediatek) and [standalone CLI](https://github.com/codeandsolder/ghidra-wwan-modem-tools/tree/main/cli) have moved there. This repository is archived; its historical releases remain available.
+
 Ghidra extension and command-line tools for MediaTek Catcher/META modem databases (`MDDB_*.EDB`).
 
 This started while reverse-engineering a Fibocom FM350-GL / MediaTek T700 modem. The shipping firmware contains a roughly 10 MB `MDDB_InfoCustomAppSrcP_MT6880_*.EDB`; it turns out to be a small `CATD` container around a perfectly ordinary RocksDB:
